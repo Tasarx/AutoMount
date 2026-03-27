@@ -1,0 +1,21 @@
+name: AutoMount
+options:
+  bundleIdPrefix: com.example
+targets:
+  AutoMount:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.1"
+    sources: [Sources]
+    info:
+      path: Info.plist
+      properties:
+        LSMinimumSystemVersion: "14.1"
+        NSPrincipalClass: NSApplication
+        NSAppleEventsUsageDescription: "Required to run helper scripts via AppleScript to update autofs."
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: NO
