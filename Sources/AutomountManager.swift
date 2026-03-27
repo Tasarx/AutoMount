@@ -8,10 +8,11 @@ struct AutoNasEntry: Identifiable, Hashable {
     let username: String
 }
 
-enum AutoMountError: LocalizedError {
+enum AutoMountError: LocalizedError, Equatable {
     case invalidAppleScript
     case appleScriptFailed(String?)
     case passwordEncodingFailed
+    case autoMasterBlocked
 
     var errorDescription: String? {
         switch self {
@@ -21,6 +22,8 @@ enum AutoMountError: LocalizedError {
             return "Script execution failed: \(reason ?? "Unknown error")"
         case .passwordEncodingFailed:
             return "Failed to URL encode the password for SMB URI format."
+        case .autoMasterBlocked:
+            return "TCC Protection blocked modification of /etc/auto_master"
         }
     }
 }
@@ -75,6 +78,26 @@ class AutomountManager {
         return mounts
     }
 
+    /// Explicitly handles the one-time /etc/auto_master system configuration
+    private static func ensureAutoMasterIsConfigured() throws {
+        // Check if the master config is already mapped
+        let checkScript = "grep -q 'auto_nas' /etc/auto_master || echo 'MISSING'"
+        let checkOutput = try executeAsRoot(script: checkScript)
+        
+        if checkOutput.contains("MISSING") {
+            // Attempt to write the required map pointer into the master config
+            let appendScript = """
+            echo "/- auto_nas -nosuid,noowners" >> /etc/auto_master
+            """
+            do {
+                try executeAsRoot(script: appendScript)
+            } catch {
+                // If this step throws, it means macOS TCC rigidly blocked the operation.
+                throw AutoMountError.autoMasterBlocked
+            }
+        }
+    }
+
     /// Appends or updates a mount in autofs using root script.
     static func setupAutofs(
         serverName: String,
@@ -83,6 +106,9 @@ class AutomountManager {
         username: String,
         password: String
     ) throws {
+        // 1. Ensure the core routing file contains our custom map exactly once
+        try ensureAutoMasterIsConfigured()
+        
         let currentUser = NSUserName()
         let sanitizedPassword = URLQueryAllowedCharacterSet.encode(password)
         
@@ -93,14 +119,11 @@ class AutomountManager {
         let nasDirectoryPath = "/Users/\(currentUser)/NAS/\(serverName)"
         let autoNasContent = "\(nasDirectoryPath) -fstype=smbfs,soft ://\(username):\(sanitizedPassword)@\(ipAddress)/\(shareName)"
 
+        // 2. Perform the individual folder mappings
         let shellScript = """
         mkdir -p "\(nasDirectoryPath)" 2>/dev/null || true
         chown \(currentUser) "/Users/\(currentUser)/NAS" 2>/dev/null || true
         chown \(currentUser) "\(nasDirectoryPath)" 2>/dev/null || true
-        
-        if ! grep -q "auto_nas" /etc/auto_master 2>/dev/null; then
-            echo "/- auto_nas -nosuid,noowners" >> /etc/auto_master 2>/dev/null || true
-        fi
         
         sed -i '' '\\|^'"\(nasDirectoryPath)"' |d' /etc/auto_nas 2>/dev/null || true
         

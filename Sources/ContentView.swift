@@ -16,6 +16,10 @@ struct ContentView: View {
     @State private var statusMessage: String = ""
     @State private var isError: Bool = false
     @State private var isWorking: Bool = false
+    
+    // Auto master failure handling
+    @State private var showAutoMasterPrompt: Bool = false
+    private let autoMasterCommand = "sudo sh -c 'echo \"/- auto_nas -nosuid,noowners\" >> /etc/auto_master'"
 
     var body: some View {
         NavigationSplitView {
@@ -81,6 +85,9 @@ struct ContentView: View {
         .task {
             refreshMounts()
         }
+        .sheet(isPresented: $showAutoMasterPrompt) {
+            autoMasterInstructionSheet
+        }
     }
 
     // MARK: - Handlers
@@ -97,7 +104,6 @@ struct ContentView: View {
                     self.existingMounts = mounts
                     self.isFetching = false
                     
-                    // If the currently selected mount was deleted externally, clear selection
                     if let selection = self.selectedMount, !mounts.contains(selection) {
                         self.selectedMount = nil
                     }
@@ -128,7 +134,6 @@ struct ContentView: View {
             } catch {
                 DispatchQueue.main.async {
                     self.isWorking = false
-                    // Optional: show error alert to user
                 }
             }
         }
@@ -154,7 +159,6 @@ struct ContentView: View {
                     self.isError = false
                     self.statusMessage = "Mount successfully created!"
                     
-                    // Clear fields safely
                     self.serverDisplayName = ""
                     self.ipAddress = ""
                     self.smbShareName = ""
@@ -162,6 +166,12 @@ struct ContentView: View {
                     self.password = ""
                     
                     self.refreshMounts()
+                }
+            } catch let error as AutoMountError where error == .autoMasterBlocked {
+                DispatchQueue.main.async {
+                    self.isWorking = false
+                    self.showAutoMasterPrompt = true
+                    self.statusMessage = ""
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -174,6 +184,58 @@ struct ContentView: View {
     }
 
     // MARK: - Views
+    
+    private var autoMasterInstructionSheet: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                Image(systemName: "shield.lefthalf.filled")
+                    .foregroundColor(.blue)
+                    .font(.largeTitle)
+                Text("Final Setup Step Required")
+                    .font(.title2.bold())
+            }
+            .padding(.bottom, 8)
+            
+            Text("macOS rigidly protects the core system network mapping file from being modified by third-party applications. To authorize these mounts on a new Mac, you must append our custom map once.")
+                .font(.callout)
+            
+            Text("Please open the default **Terminal** app and paste the following command:")
+            
+            HStack {
+                Text(autoMasterCommand)
+                    .font(.system(.footnote, design: .monospaced))
+                    .padding()
+                    .background(Color.primary.opacity(0.05))
+                    .cornerRadius(8)
+                
+                Button(action: {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(autoMasterCommand, forType: .string)
+                }) {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.bordered)
+                .help("Copy to clipboard")
+            }
+            
+            Spacer()
+            
+            HStack {
+                Button("Cancel", role: .cancel) {
+                    showAutoMasterPrompt = false
+                }
+                Spacer()
+                Button("I've Copied & Run It") {
+                    showAutoMasterPrompt = false
+                    setupNewMount() // Retry the mount creation
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(32)
+        .frame(width: 550, height: 350)
+    }
 
     @ViewBuilder
     private func mountDetailView(for mount: AutoNasEntry) -> some View {
